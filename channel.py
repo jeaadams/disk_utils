@@ -7,6 +7,7 @@ import astropy.constants as const
 import astropy.units as u
 from dataclasses import dataclass
 from typing import Tuple
+from ipywidgets import interact
 
 @dataclass
 class _ChannelParameters:
@@ -30,6 +31,43 @@ class Channel:
         self.header = fits.getheader(filename)
         self.rest_freq = rest_freq
         self.parameters = self._get_parameters(hd=self.header)
+
+    def plot_slice(self, z, cmap = 'magma', wrt_source = False, source_velocity = None):
+
+        fig, ax = plt.subplots(nrows = 1, ncols = 1, figsize = (6, 5))
+        Tb = self.get_brightness_temperature(z)
+        im = plt.imshow(Tb, cmap=cmap, origin='lower', extent = self.parameters.extent, aspect = 'auto')
+
+        # Add velocity
+        nu = self.header['CRVAL3'] + z * self.header['CDELT3']  
+        v = const.c.to(u.km/u.s).value * (1 - nu / self.rest_freq)
+        if wrt_source:
+            ax.text(0.5, 0.05,  f'v = {np.round(v - source_velocity, 2)} km/s', transform=ax.transAxes, ha='center', va='bottom', fontsize=20, color = 'white')
+        else:
+            ax.text(0.5, 0.05,  f'v = {np.round(v, 2)} km/s', transform=ax.transAxes, ha='center', va='bottom', fontsize=20, color = 'white')
+
+        # Set limits + labels + colorbar
+        ax.set_xlim(5.5, -5.5)
+        ax.set_ylim(-5.5, 5.5)
+        ax.set_xlabel(r"$\Delta$ RA [arcsec]")
+        ax.set_ylabel(r"$\Delta$ DEC [arcsec]")
+        fig.colorbar(im, orientation='vertical', ticklocation='right', label = r'$\mathrm{T_{b}}$ [K]', extend = 'both')
+
+        # Add beam
+        beam_plot = Ellipse((4.0, -4.0),
+                        self.header['BMAJ']*3600., self.header['BMIN']*3600., 90.-self.header['BPA'])
+        beam_plot.set_facecolor('w')
+        ax.add_artist(beam_plot)
+
+        plt.show()
+
+    def plot_interactive(self, cmap = 'magma', wrt_source = False, source_velocity = None):
+        """
+        Plot channels with slider (DS9 style).
+        """
+        im = self.data
+        interact(lambda z: self.plot_slice(z, cmap = cmap, wrt_source = wrt_source, source_velocity = source_velocity), z=(0, im.shape[0] - 1))
+
 
     def plot_channel_map(self, source_velocity = None, wrt_source = False,  xlims = np.array([5.5, -5.5]), ylims = np.array([-5.5, 5.5]), cm = 'magma', center_channels = False, n_channels = 25, nrows = 5, ncols = 5):
         """
@@ -65,31 +103,25 @@ class Channel:
         plt.rcParams['xtick.labelsize'] = 25  # X-tick font size
         plt.rcParams['ytick.labelsize'] = 25  # Y-tick font size
 
+        midpoint = indices.shape[0] // 2
+        midpoint_index = indices[midpoint]
+        Tb_mid = self.get_brightness_temperature(midpoint_index)
+        vmin, vmax = np.nanpercentile(Tb_mid, [0.001, 99.999])
 
         # Go through the array of indices
         for i, index in enumerate(indices):
 
             ax = axs[i]  # Use the i-th subplot
             
-            # Select the data for this channel
-            channel  = I[index,:,:] # Selecting the middle channel
-            
             # Compute frequency
             nu = hd['CRVAL3'] + index * hd['CDELT3']  
 
             v = const.c.to(u.km/u.s).value * (1 - nu / self.rest_freq)
 
-            # Compute temperature
-            Intensity = (channel * 1e-26 / self.parameters.beam)
-
-            c = 299792458.0
-            k = 1.380649e-23
-
-            # Compute brightness temperature
-            Tb = ((Intensity * c**2) / (2 * (nu)**2 * k))
+            Tb = self.get_brightness_temperature(index)
             
             ##### PLOT #####
-            vmin, vmax = np.nanpercentile(Tb, [0.001, 99.999])
+            
             im = ax.imshow(Tb, origin='lower', extent = self.parameters.extent, cmap = cm, aspect = 'auto', vmin = vmin, vmax = vmax)
 
             # Add velocity
@@ -146,6 +178,31 @@ class Channel:
         plt.show()
 
 
+    def get_brightness_temperature(self, index):
+        """
+        Get the brightness temperature 
+        """
+        I = self.data
+        hd = self.header
+
+        # Select the data for this channel
+        channel  = I[index,:,:] # Selecting the middle channel
+        
+        # Compute frequency
+        nu = hd['CRVAL3'] + index * hd['CDELT3']
+
+        # Compute temperature
+        Intensity = (channel * 1e-26 / self.parameters.beam)
+
+        c = 299792458.0
+        k = 1.380649e-23
+
+        # Compute brightness temperature
+        Tb = ((Intensity * c**2) / (2 * (nu)**2 * k))
+
+        return Tb
+             
+
     @staticmethod
     def _get_parameters(hd):
             """
@@ -168,3 +225,5 @@ class Channel:
                 beam,
                 FWHM
             )
+
+    
